@@ -1,5 +1,122 @@
-# Connect to Microsoft Graph
-Connect-MgGraph -Scopes "User.Read.All", "UserAuthenticationMethod.Read.All", "AuditLog.Read.All", "Organization.Read.All", "Directory.Read.All", "IdentityRiskyUser.Read.All", "EntitlementManagement.Read.All" -NoWelcome
+$properties = @(
+    "Id",
+    "DisplayName",
+    "Surname",
+    "GivenName",
+    "UserPrincipalName",
+    "UserType",
+    "CreatedDateTime",
+    "LastPasswordChangeDateTime",
+    "PasswordPolicies",
+    "PreferredLanguage",
+    "SignInSessionsValidFromDateTime",
+    "JobTitle",
+    "CompanyName",
+    "Department",
+    "EmployeeId",
+    "EmployeeType",
+    "EmployeeHireDate",
+    "EmployeeLeaveDateTime",
+    "Manager",
+    "StreetAddress",
+    "City",
+    "State",
+    "PostalCode",
+    "Country",
+    "BusinessPhones",
+    "MobilePhone",
+    "Mail",
+    "OtherMails",
+    "ProxyAddresses",
+    "ImAddresses",
+    "Mailnickname",
+    "AgeGroup",
+    "ConsentProvidedForMinor",
+    "LegalAgeGroupClassification",
+    "AccountEnabled",
+    "UsageLocation",
+    "PreferredDataLocation",
+    "OnPremisesSyncEnabled",
+    "OnPremisesLastSyncDateTime",
+    "OnPremisesDistinguishedName",
+    "OnPremisesImmutableId",
+    "OnPremisesSamAccountName",
+    "OnPremisesUserPrincipalName",
+    "OnPremisesDomainName",
+    "SignInActivity",
+    "onPremisesImmutableId")
+
+$CSVproperties = @(
+    # Identity section
+    "Id",
+    "DisplayName",
+    @{Name="First name"; Expression={$_.GivenName}},
+    @{Name="Last name"; Expression={$_.Surname}},
+    "UserPrincipalName",
+    @{Name="Domain name"; Expression = { $_.UserPrincipalName.Split('@')[1] }},
+    "UserType",
+    "CreatedDateTime",
+    "LastPasswordChangeDateTime",
+    @{Name="LicensesSkuType";Expression={[string]::join(";", ($_.LicensesSkuType))}},
+    "PasswordPolicies",
+    "PreferredLanguage",
+    "SignInSessionsValidFromDateTime",
+    # Job Information section
+    "JobTitle",
+    "CompanyName",
+    "Department",
+    "EmployeeId",
+    "EmployeeType",
+    "EmployeeHireDate",
+    "EmployeeLeaveDateTime",
+    "ManagerDisplayName",
+    "ManagerUPN",
+    "SponsorDisplayName",
+    "SponsorUPN",
+    # Contact Information
+    "StreetAddress",
+    "City",
+    "State",
+    "PostalCode",
+    "Country",
+    @{Name="BusinessPhones"; Expression = { ($_.BusinessPhones -join " ; ") }},
+    "MobilePhone",
+    "Mail",
+    @{Name="OtherMails";Expression={[string]::join(" ; ", ($_.OtherMails))}},
+    @{Name="ProxyAddresses";Expression={[string]::join(" ; ", ($_.ProxyAddresses))}},
+    @{Name="ImAddresses";Expression={[string]::join(" ; ", ($_.ImAddresses))}},
+    "Mailnickname",
+    # Parental controls
+    "AgeGroup",
+    "ConsentProvidedForMinor",
+    "LegalAgeGroupClassification",
+    # Settings
+    "AccountEnabled",
+    "UsageLocation",
+    "PreferredDataLocation",
+    # On-premises
+    "OnPremisesSyncEnabled",
+    "OnPremisesLastSyncDateTime",
+    "OnPremisesDistinguishedName",
+    "OnPremisesImmutableId",
+    "OnPremisesSamAccountName",
+    "OnPremisesUserPrincipalName",
+    "OnPremisesDomainName",
+    # Authentication methods
+    "MFA status",
+    "Email authentication",
+    "FIDO2 authentication",
+    "Microsoft Authenticator App",
+    "Microsoft Authenticator Lite",
+    "Phone authentication",
+    "Software Oath",
+    "Windows Hello for Business",
+    @{Name="LastSignInDateTime";Expression={$_.SignInActivity.LastSuccessfulSignInDateTime}}
+    )
+
+#Requires -Version 7
+
+Connect-MgGraph
 
 # Start timing
 $startTime = Get-Date
@@ -8,166 +125,165 @@ $startTime = Get-Date
 $LogDate = Get-Date -f yyyyMMddhhmm
 $Csvfile = Join-Path -Path $PSScriptRoot -ChildPath "EntraIDUsers_$LogDate.csv"
 
-# Check if EntraID Premium is available
-$hasPremium = (Get-MgSubscribedSku).ServicePlans.ServicePlanName -contains "AAD_PREMIUM"
-Write-Host "Entra ID Premium subscription detected: $hasPremium" -ForegroundColor Cyan
+Write-Output "Retrieving all users..."
+$users = Get-MgUser -All -Property $properties
 
-# Retrieve all Access Package assignments once
-$allAssignments = @()
-try {
-    $response = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/identityGovernance/entitlementManagement/accessPackageAssignments?`$expand=accessPackage,accessPackageAssignmentPolicy"
-    $allAssignments = $response.value
-} catch {
-    Write-Host "Failed to retrieve Access Package assignments."
-}
+$usersDetails = [System.Collections.Concurrent.ConcurrentBag[System.Object]]::new()
+$length = $users.length
+$i = 0
+$batchSize = 4
 
-# Define user properties to pull
-$commonProperties = @(
-    'Id','GivenName','Surname','DisplayName','UserPrincipalName','Mail','JobTitle',
-    'Department','CompanyName','OfficeLocation','ProxyAddresses','CreatedDateTime',
-    'EmployeeID','MobilePhone','BusinessPhones','StreetAddress','City','PostalCode',
-    'State','Country','UserType','onPremisesSyncEnabled','OnPremisesImmutableId',
-    'AccountEnabled','AssignedLicenses'
-)
+Write-Output "Batch Creation..."
 
-$propertyParams = @{
-    All            = $true
-    ExpandProperty = 'manager'
-    Property       = if ($hasPremium) { @('SignInActivity') + $commonProperties } else { $commonProperties }
-}
+$batches = [System.Collections.Generic.List[pscustomobject]]::new()
+for ($i = 0; $i -lt $users.Length; $i += $batchSize) {
+    $end = $i + $batchSize - 1
+    if ($end -ge $users.Length) { $end = $users.Length }
+    $index = $i * 3
 
-$users = Get-MgUser @propertyParams
-$totalUsers = $users.Count
-$Report = [System.Collections.Generic.List[Object]]::new()
 
-# Process each user
-foreach ($index in 0..($totalUsers - 1)) {
-    $user = $users[$index]
-
-    # Show live progress
-    Write-Host "$($index + 1)/$totalUsers - Processing $($user.UserPrincipalName)"
-    Write-Progress -Activity "Exporting Users to CSV" -Status "Progress..." -PercentComplete ((($index + 1) / $totalUsers) * 100)
-
-    $managerDN  = $user.Manager?.AdditionalProperties?.DisplayName
-    $managerUPN = $user.Manager?.AdditionalProperties?.UserPrincipalName
-
-    $ReportLine = [PSCustomObject]@{
-        "ID"                           = $user.Id
-        "First name"                   = $user.GivenName
-        "Last name"                    = $user.Surname
-        "Display name"                 = $user.DisplayName
-        "User principal name"          = $user.UserPrincipalName
-        "Domain name"                  = $user.UserPrincipalName.Split('@')[1]
-        "Email address"                = $user.Mail
-        "Job title"                    = $user.JobTitle
-        "Manager display name"         = $managerDN
-        "Manager user principal name"  = $managerUPN
-        "Department"                   = $user.Department
-        "Company"                      = $user.CompanyName
-        "Office"                       = $user.OfficeLocation
-        "Employee ID"                  = $user.EmployeeID
-        "Mobile"                       = $user.MobilePhone
-        "Phone"                        = $user.BusinessPhones -join ','
-        "Street"                       = $user.StreetAddress
-        "City"                         = $user.City
-        "Postal code"                  = $user.PostalCode
-        "State"                        = $user.State
-        "Country"                      = $user.Country
-        "User type"                    = $user.UserType
-        "On-Premises sync"             = if ($user.onPremisesSyncEnabled) { "Enabled" } else { "Disabled" }
-        "Immutable ID (On-Prem)"       = if ($user.OnPremisesImmutableId) { $user.OnPremisesImmutableId } else { "None" }
-        "Account status"               = if ($user.AccountEnabled) { "Enabled" } else { "Disabled" }
-        "Account Created on"           = $user.CreatedDateTime
-        "Last successful sign in"      = if ($hasPremium -and $user.SignInActivity?.LastSuccessfulSignInDateTime) { $user.SignInActivity.LastSuccessfulSignInDateTime } else { "Unavailable" }
-        "Licensed"                     = if ($user.AssignedLicenses.Count -gt 0) { "Yes" } else { "No" }
-        "DefaultMFAMethod"             = "-"
-        "MFA status"                   = "-"
-        "Email authentication"         = "-"
-        "FIDO2 authentication"         = "-"
-        "Microsoft Authenticator App"  = "-"
-        "Microsoft Authenticator Lite" = "-"
-        "Phone authentication"         = "-"
-        "Software Oath"                = "-"
-        "Temporary Access Pass"        = "-"
-        "Windows Hello for Business"   = "-"
-        "Password Never Expires"       = "-"
-        "Last Password Change Date"    = "-"
-        "Usage Location"               = "-"
-        "Assigned Licenses"            = "-"
-        "Is Admin (Privileged Role)"   = "-"
-        "Sign-in Risk State"           = "-"
-        "Access Packages"              = "-"
+    $requests = $users[$i..($end)] | ForEach-Object {
+        @{
+            'Id'     = "$($PSItem.Id):manager"
+            'Method' = 'GET'
+            'Url'    = "users/{0}/manager" -f $PSItem.Id 
+        },
+        @{
+            'Id'     = "$($PSItem.Id):sponsor"
+            'Method' = 'GET'
+            'Url'    = "users/{0}/sponsors" -f $PSItem.Id 
+        },
+        @{
+            'Id'     = "$($PSItem.Id):license"
+            'Method' = 'GET'
+            'Url'    = "users/{0}/licenseDetails" -f $PSItem.Id 
+        },
+        @{
+            'Id'     = "$($PSItem.Id):authenticationMethods"
+            'Method' = 'GET'
+            'Url'    = "users/{0}/authentication/methods" -f $PSItem.Id 
+        },
+        @{
+            'Id'     = "$($PSItem.Id):authenticationPreference"
+            'Method' = 'GET'
+            'Url'    = "users/{0}/authentication/SignInPreferences" -f $PSItem.Id 
+        }
     }
 
-    try {
-        $details = Get-MgUser -UserId $user.Id -Property PasswordPolicies, lastPasswordChangeDateTime, UsageLocation
-        $ReportLine."Password Never Expires" = if ($details.PasswordPolicies -notmatch "DisablePasswordExpiration") { "No" } else { "Yes" }
-        $ReportLine."Last Password Change Date" = $details.lastPasswordChangeDateTime
-        $ReportLine."Usage Location" = $details.UsageLocation
-    } catch {}
+    $batches.Add(@{
+        'Method'      = 'Post'
+        'Uri'         = 'https://graph.microsoft.com/beta/$batch'
+        'ContentType' = 'application/json'
+        'Body'        = @{
+            'requests' = @($requests)
+        } | ConvertTo-Json
+    })
+}
 
-    try {
-        $skus = $user.AssignedLicenses | ForEach-Object { $_.SkuId }
-        $ReportLine."Assigned Licenses" = if ($skus.Count -gt 0) { $skus -join ", " } else { "None" }
-    } catch {}
+Write-Output "Sending requests" 
 
-    try {
-        $roles = Get-MgUserMemberOf -UserId $user.Id -All | Where-Object { $_.'@odata.type' -eq "#microsoft.graph.directoryRole" }
-        $ReportLine."Is Admin (Privileged Role)" = if ($roles.DisplayName) { $roles.DisplayName -join ', ' } else { "No" }
-    } catch {}
+$batches | ForEach-Object -Parallel {
+    $responses = $using:usersDetails
+    $request = Invoke-MgGraphRequest @PSItem
+    $request.responses | ForEach-Object {$responses.Add([pscustomobject]@{
+            'UserId' = $PSItem.Id.Split(":")[0]
+            'requesttype' = $PSItem.Id.Split(":")[1]
+            'body' = $PSItem.body 
+        })}
+}
 
-    try {
-        $riskyUser = Get-MgRiskyUser -UserId $user.Id -ErrorAction Stop
-        $ReportLine."Sign-in Risk State" = $riskyUser.RiskState
-    } catch {}
+$usersDetails = $usersDetails | Group-Object -Property UserId -AsHashTable
 
-    try {
-        $DefaultMFAUri = "https://graph.microsoft.com/beta/users/$($user.Id)/authentication/signInPreferences"
-        $DefaultMFAMethod = Invoke-MgGraphRequest -Uri $DefaultMFAUri -Method GET
-        $ReportLine.DefaultMFAMethod = $DefaultMFAMethod.userPreferredMethodForSecondaryAuthentication ?? "Not set"
-    } catch {}
+Write-Output "Processing requests" 
 
-    try {
-        $MFAData = Get-MgUserAuthenticationMethod -UserId $user.Id
-        foreach ($method in $MFAData) {
-            switch ($method.AdditionalProperties["@odata.type"]) {
-                "#microsoft.graph.emailAuthenticationMethod"                  { $ReportLine."Email authentication" = $true; $ReportLine."MFA status" = "Enabled" }
-                "#microsoft.graph.fido2AuthenticationMethod"                  { $ReportLine."FIDO2 authentication" = $true; $ReportLine."MFA status" = "Enabled" }
+foreach ($user in $users){
+    $DaySinceLastCo = ($user.SignInActivity.LastSuccessfulSignInDateTime - $(Get-Date)).Days
+    if ($usersDetails.ContainsKey($user.Id)){
+        
+        $authDetails = @{
+            "MFA status"                   = "-"
+            "Email authentication"         = "-"
+            "FIDO2 authentication"         = "-"
+            "Microsoft Authenticator App"  = "-"
+            "Microsoft Authenticator Lite" = "-"
+            "Phone authentication"         = "-"
+            "Software Oath"                = "-"
+            "Windows Hello for Business"   = "-"
+        }
+
+        $authMethods = $($usersDetails[$user.Id] | Where { $_.requesttype -eq "authenticationMethods" }).body.value
+
+        if ($authMethods.Count -gt 0) {
+            $authDetails["MFA status"] = "Enabled"
+        }
+
+        foreach ($method in $authMethods) {
+            $odataType = $method.'@odata.type'
+            switch ($odataType) {
                 "#microsoft.graph.microsoftAuthenticatorAuthenticationMethod" {
-                    if ($method.AdditionalProperties["deviceTag"] -eq 'SoftwareTokenActivated') {
-                        $ReportLine."Microsoft Authenticator App" = $true
-                    } else {
-                        $ReportLine."Microsoft Authenticator Lite" = $true
-                    }
-                    $ReportLine."MFA status" = "Enabled"
+                    $authDetails["Microsoft Authenticator App"] = $method.displayName
                 }
-                "#microsoft.graph.phoneAuthenticationMethod"                  { $ReportLine."Phone authentication" = $true; $ReportLine."MFA status" = "Enabled" }
-                "#microsoft.graph.softwareOathAuthenticationMethod"          { $ReportLine."Software Oath" = $true; $ReportLine."MFA status" = "Enabled" }
-                "#microsoft.graph.temporaryAccessPassAuthenticationMethod"   { $ReportLine."Temporary Access Pass" = $true; $ReportLine."MFA status" = "Enabled" }
-                "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod" { $ReportLine."Windows Hello for Business" = $true; $ReportLine."MFA status" = "Enabled" }
+                "#microsoft.graph.emailAuthenticationMethod" {
+                    $authDetails["Email authentication"] = $method.emailAddress
+                }
+                "#microsoft.graph.phoneAuthenticationMethod" {
+                    $authDetails["Phone authentication"] = $method.phoneNumber
+                }
+                "#microsoft.graph.fido2AuthenticationMethod" {
+                    $authDetails["FIDO2 authentication"] = $method.model
+                }
+                "#microsoft.graph.softwareOathAuthenticationMethod" {
+                    $authDetails["Software Oath"] = "Configured"
+                }
+                "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod" {
+                    $authDetails["Windows Hello for Business"] = "Configured"
+                }
             }
         }
-    } catch {}
 
-    try {
-        $userAPs = $allAssignments | Where-Object { $_.targetId -eq $user.Id }
-        if ($userAPs.Count -gt 0) {
-            $ReportLine."Access Packages" = $userAPs | ForEach-Object { $_.accessPackage.displayName } | Sort-Object -Unique | Join-String -Separator ", "
-        } else {
-            $ReportLine."Access Packages" = "None"
+        foreach ($key in $authDetails.Keys) {
+            $user | Add-Member -MemberType NoteProperty -Name $key -Value $authDetails[$key] -Force
         }
-    } catch {
-        $ReportLine."Access Packages" = "Error"
+        }
+        }
+
+        $user | Add-Member -MemberType NoteProperty -Name ManagerUPN `
+            -Value $($($usersDetails[$user.Id] | where {$_.requesttype -eq "manager"}).body.userPrincipalName)
+
+        $user | Add-Member -MemberType NoteProperty -Name SponsorUPN `
+            -Value $(($($usersDetails[$user.Id] | where {$_.requesttype -eq "sponsor"}).body.value)[0].userPrincipalName)
+
+        $user | Add-Member -MemberType NoteProperty -Name ManagerDisplayName `
+            -Value $($($usersDetails[$user.Id] | Where { $_.requesttype -eq "manager" }).body.displayName)
+
+        $user | Add-Member -MemberType NoteProperty -Name SponsorDisplayName `
+            -Value $($($usersDetails[$user.Id] | Where { $_.requesttype -eq "sponsor" }).body.value[0].displayName)
+
+        $user | Add-Member -MemberType NoteProperty -Name LicensesSkuType `
+            -Value $($($usersDetails[$user.Id] | where {$_.requesttype -eq "license"}).body.value | select -expandproperty SkuPartNumber)
+
+        $user | Add-Member -MemberType NoteProperty -Name "MFA status" -Value $(if ($authenticationType.Count -gt 0) { "Enabled" } else { "Disabled" }) -Force
+        $user | Add-Member -MemberType NoteProperty -Name "Email authentication" -Value $(if ($authenticationType -contains "Email") { "Yes" } else { "No" }) -Force
+        $user | Add-Member -MemberType NoteProperty -Name "FIDO2 authentication" -Value $(if ($authenticationType -contains "Fido2") { "Yes" } else { "No" }) -Force
+        $user | Add-Member -MemberType NoteProperty -Name "Microsoft Authenticator App" -Value $(if ($authenticationType -contains "MicrosoftAuthenticator") { "Yes" } else { "No" }) -Force
+        $user | Add-Member -MemberType NoteProperty -Name "Microsoft Authenticator Lite" -Value $(if ($authenticationType -contains "TemporaryAccessPass") { "Yes" } else { "No" }) -Force
+        $user | Add-Member -MemberType NoteProperty -Name "Phone authentication" -Value $(if ($authenticationType -contains "SMS") { "Yes" } else { "No" }) -Force
+        $user | Add-Member -MemberType NoteProperty -Name "Software Oath" -Value $(if ($authenticationType -contains "SoftwareOath") { "Yes" } else { "No" }) -Force
+        $user | Add-Member -MemberType NoteProperty -Name "Windows Hello for Business" -Value $(if ($authenticationType -contains "Windows Hello") { "Yes" } else { "No" }) -Force
+
+    if ($user.OnPremisesSyncEnabled -eq $True){
+        $user.EmployeeLeaveDateTime = $user.OnPremisesExtensionAttributes.ExtensionAttribute1
     }
 
-    $Report.Add($ReportLine)
-}
+
+Disconnect-MgGraph
+
+Write-Output "Writing CSV"
+$users | Select-Object -Property $CSVproperties | Export-Csv -Path $Csvfile -Delimiter ';' -NoTypeInformation -Encoding UTF8
 
 # End timing
 $endTime = Get-Date
 $elapsed = $endTime - $startTime
 
-Write-Progress -Activity "Exporting Users" -Completed
-$Report | Sort-Object "Display name" | Export-Csv -Path $Csvfile -NoTypeInformation -Encoding UTF8
-Write-Host "`n✅ Entra ID user export completed. File saved at: $Csvfile" -ForegroundColor Green
+Write-Host "Entra ID user export completed. File saved at: $Csvfile" -ForegroundColor Green
 Write-Host "Total time: $($elapsed.Minutes) minutes and $($elapsed.Seconds) seconds." -ForegroundColor Cyan
