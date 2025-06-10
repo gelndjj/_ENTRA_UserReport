@@ -1,5 +1,3 @@
-# Requires PS7
-
 $properties = @(
     "Id",
     "DisplayName",
@@ -117,7 +115,8 @@ $CSVproperties = @(
     # Registered Devices
     @{Name="Devices";Expression={[string]::join(" ; ", ($_.Devices))}}
     )
-
+    
+#Requires -Version 7
 Connect-MgGraph
 
 # Start timing
