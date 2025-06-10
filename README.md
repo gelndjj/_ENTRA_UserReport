@@ -9,7 +9,9 @@
 This PowerShell script exports a comprehensive CSV report of all users in Microsoft Entra ID (formerly Azure AD), enriched with detailed insights from Microsoft Graph. It’s designed for IT admins and security teams who need a **quick, complete, and centralized** view of Entra ID accounts, including:
 
 - ✅ User identity and account metadata
-- 🔐 MFA method enrollment (Authenticator, OATH, FIDO2, etc.)
+- 🔐 MFA method details by type (Microsoft Authenticator, OATH, FIDO2, etc.)
+- 📱 Auth device details (e.g. "iPhone 16 Pro", phone number, email used for MFA)
+- 💻 Registered devices associated with each user
 - 🛡️ Privileged role memberships
 - 🗓️ Password expiration and last change
 - 🌍 Usage location, job details, and contact info
@@ -21,8 +23,9 @@ This PowerShell script exports a comprehensive CSV report of all users in Micros
 - Connects to Microsoft Graph with delegated permissions
 - Exports detailed user attributes into a clean, ready-to-filter CSV
 - Reports key security posture elements:
-  - MFA setup
-  - Password policy
+    - MFA setup + per-method device details (e.g., display name, email, phone)
+    - Password policy and sign-in preferences
+    - Devices registered to the user
 - Tracks and displays runtime duration
 
 ---
@@ -52,35 +55,35 @@ This PowerShell script exports a comprehensive CSV report of all users in Micros
 
 ## 📂 Fields Included
 
-| 🧍 Identity & Contact              | 🔐 Security & Authentication              | 🏢 Organizational Details          | 🌐 Hybrid & Sync Details               |
-|----------------------------------|-------------------------------------------|-----------------------------------|----------------------------------------|
-| Id                               | AccountEnabled                             | JobTitle                          | OnPremisesSyncEnabled                  |
-| DisplayName                      | MFA status                                 | CompanyName                       | OnPremisesLastSyncDateTime             |
-| First name                       | Email authentication                       | Department                        | OnPremisesDistinguishedName            |
-| Last name                        | FIDO2 authentication                       | EmployeeId                        | OnPremisesImmutableId                  |
-| UserPrincipalName                | Microsoft Authenticator App                | EmployeeType                      | OnPremisesSamAccountName               |
-| Domain name                      | Microsoft Authenticator Lite               | EmployeeHireDate                  | OnPremisesUserPrincipalName            |
-| UserType                         | Phone authentication                       | EmployeeLeaveDateTime             | OnPremisesDomainName                   |
-| CreatedDateTime                  | Software Oath                              | ManagerDisplayName                | UsageLocation                          |
-| LastPasswordChangeDateTime       | Windows Hello for Business                 | ManagerUPN                        | PreferredDataLocation                  |
-| PasswordPolicies                 | AuthenticationMethod                       | SponsorDisplayName                |                                        |
-| PreferredLanguage                | DefaultAuthentication                      | SponsorUPN                        |                                        |
-| SignInSessionsValidFromDateTime  | LastSignInDateTime                         |                                   |                                        |
-| MailNickname                     | LicensesSkuType                            |                                   |                                        |
-| Mail                             |                                           |                                   |                                        |
-| OtherMails                       |                                           |                                   |                                        |
-| ProxyAddresses                   |                                           |                                   |                                        |
-| ImAddresses                      |                                           |                                   |                                        |
-| AgeGroup                         |                                           |                                   |                                        |
-| ConsentProvidedForMinor          |                                           |                                   |                                        |
-| LegalAgeGroupClassification      |                                           |                                   |                                        |
-| BusinessPhones                   |                                           |                                   |                                        |
-| MobilePhone                      |                                           |                                   |                                        |
-| StreetAddress                    |                                           |                                   |                                        |
-| City                             |                                           |                                   |                                        |
-| State                            |                                           |                                   |                                        |
-| PostalCode                       |                                           |                                   |                                        |
-| Country                          |                                           |                                   |                                        |
+| 🧍 Identity & Contact              | 🔐 Security & Authentication                        | 🏢 Organizational Details          | 🌐 Hybrid & Sync Details               |
+|----------------------------------|-----------------------------------------------------|-----------------------------------|----------------------------------------|
+| Id                               | AccountEnabled                                      | JobTitle                          | OnPremisesSyncEnabled                  |
+| DisplayName                      | MicrosoftAuthenticatorDisplayName                  | CompanyName                       | OnPremisesLastSyncDateTime             |
+| First name                       | EmailAuthAddress                                   | Department                        | OnPremisesDistinguishedName            |
+| Last name                        | SMSPhoneNumber                                     | EmployeeId                        | OnPremisesImmutableId                  |
+| UserPrincipalName                | FIDO2DisplayName                                   | EmployeeType                      | OnPremisesSamAccountName               |
+| Domain name                      | WindowsHelloEnabled                                | EmployeeHireDate                  | OnPremisesUserPrincipalName            |
+| UserType                         | SoftwareOATHEnabled                                | EmployeeLeaveDateTime             | OnPremisesDomainName                   |
+| CreatedDateTime                  | AuthenticationMethod                               | ManagerDisplayName                | UsageLocation                          |
+| LastPasswordChangeDateTime       | DefaultAuthentication                              | ManagerUPN                        | PreferredDataLocation                  |
+| PasswordPolicies                 | LastSignInDateTime                                 | SponsorDisplayName                | Devices                                |
+| PreferredLanguage                | LicensesSkuType                                    | SponsorUPN                        |                                        |
+| SignInSessionsValidFromDateTime  |                                                   |                                   |                                        |
+| MailNickname                     |                                                   |                                   |                                        |
+| Mail                             |                                                   |                                   |                                        |
+| OtherMails                       |                                                   |                                   |                                        |
+| ProxyAddresses                   |                                                   |                                   |                                        |
+| ImAddresses                      |                                                   |                                   |                                        |
+| AgeGroup                         |                                                   |                                   |                                        |
+| ConsentProvidedForMinor          |                                                   |                                   |                                        |
+| LegalAgeGroupClassification      |                                                   |                                   |                                        |
+| BusinessPhones                   |                                                   |                                   |                                        |
+| MobilePhone                      |                                                   |                                   |                                        |
+| StreetAddress                    |                                                   |                                   |                                        |
+| City                             |                                                   |                                   |                                        |
+| State                            |                                                   |                                   |                                        |
+| PostalCode                       |                                                   |                                   |                                        |
+| Country                          |                                                   |                                   |                                        |
 
 ---
 
