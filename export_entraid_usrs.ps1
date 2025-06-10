@@ -1,3 +1,5 @@
+# Requires PS7
+
 $properties = @(
     "Id",
     "DisplayName",
@@ -103,18 +105,18 @@ $CSVproperties = @(
     "OnPremisesUserPrincipalName",
     "OnPremisesDomainName",
     # Authentication methods
-    "MFA status",
-    "Email authentication",
-    "FIDO2 authentication",
-    "Microsoft Authenticator App",
-    "Microsoft Authenticator Lite",
-    "Phone authentication",
-    "Software Oath",
-    "Windows Hello for Business",
+    "DefaultAuthentication",
+    "MicrosoftAuthenticatorDisplayName",
+    "EmailAuthAddress",
+    "SMSPhoneNumber",
+    "FIDO2DisplayName",
+    "WindowsHelloEnabled",
+    "SoftwareOATHEnabled",
+    @{Name="AuthenticationMethod";Expression={[string]::join(" ; ", ($_.AuthenticationMethod))}},
     @{Name="LastSignInDateTime";Expression={$_.SignInActivity.LastSuccessfulSignInDateTime}}
+    # Registered Devices
+    @{Name="Devices";Expression={[string]::join(" ; ", ($_.Devices))}}
     )
-
-#Requires -Version 7
 
 Connect-MgGraph
 
@@ -131,7 +133,7 @@ $users = Get-MgUser -All -Property $properties
 $usersDetails = [System.Collections.Concurrent.ConcurrentBag[System.Object]]::new()
 $length = $users.length
 $i = 0
-$batchSize = 4
+$batchSize = 3
 
 Write-Output "Batch Creation..."
 
@@ -152,6 +154,11 @@ for ($i = 0; $i -lt $users.Length; $i += $batchSize) {
             'Id'     = "$($PSItem.Id):sponsor"
             'Method' = 'GET'
             'Url'    = "users/{0}/sponsors" -f $PSItem.Id 
+        },
+        @{
+            'Id'     = "$($PSItem.Id):registeredDevices"
+            'Method' = 'GET'
+            'Url'    = "users/{0}/registeredDevices" -f $PSItem.Id
         },
         @{
             'Id'     = "$($PSItem.Id):license"
@@ -196,85 +203,88 @@ $usersDetails = $usersDetails | Group-Object -Property UserId -AsHashTable
 
 Write-Output "Processing requests" 
 
-foreach ($user in $users){
-    $DaySinceLastCo = ($user.SignInActivity.LastSuccessfulSignInDateTime - $(Get-Date)).Days
-    if ($usersDetails.ContainsKey($user.Id)){
-        
-        $authDetails = @{
-            "MFA status"                   = "-"
-            "Email authentication"         = "-"
-            "FIDO2 authentication"         = "-"
-            "Microsoft Authenticator App"  = "-"
-            "Microsoft Authenticator Lite" = "-"
-            "Phone authentication"         = "-"
-            "Software Oath"                = "-"
-            "Windows Hello for Business"   = "-"
-        }
+foreach ($user in $users) {
+    $DaySinceLastCo = ($user.SignInActivity.LastSuccessfulSignInDateTime - (Get-Date)).Days
 
-        $authMethods = $($usersDetails[$user.Id] | Where { $_.requesttype -eq "authenticationMethods" }).body.value
+    if ($usersDetails.ContainsKey($user.Id)) {
 
-        if ($authMethods.Count -gt 0) {
-            $authDetails["MFA status"] = "Enabled"
-        }
+        # Initialize authentication-related arrays and variables
+        $authenticationType = @()
+        $microsoftAuthenticatorDisplayName = $null
+        $emailAuthAddress = $null
+        $smsPhoneNumber = $null
+        $fido2DisplayName = $null
+        $windowsHelloEnabled = $false
+        $softwareOathEnabled = $false
 
-        foreach ($method in $authMethods) {
+        # Loop through authentication methods and gather details
+        foreach ($method in ($usersDetails[$user.Id] | Where { $_.requesttype -eq "authenticationMethods" }).body.value) {
             $odataType = $method.'@odata.type'
             switch ($odataType) {
                 "#microsoft.graph.microsoftAuthenticatorAuthenticationMethod" {
-                    $authDetails["Microsoft Authenticator App"] = $method.displayName
-                }
-                "#microsoft.graph.emailAuthenticationMethod" {
-                    $authDetails["Email authentication"] = $method.emailAddress
-                }
-                "#microsoft.graph.phoneAuthenticationMethod" {
-                    $authDetails["Phone authentication"] = $method.phoneNumber
-                }
-                "#microsoft.graph.fido2AuthenticationMethod" {
-                    $authDetails["FIDO2 authentication"] = $method.model
+                    $authenticationType += "MicrosoftAuthenticator"
+                    $microsoftAuthenticatorDisplayName = $method.displayName
                 }
                 "#microsoft.graph.softwareOathAuthenticationMethod" {
-                    $authDetails["Software Oath"] = "Configured"
+                    $authenticationType += "SoftwareOath"
+                    $softwareOathEnabled = $true
+                }
+                "#microsoft.graph.phoneAuthenticationMethod" {
+                    $authenticationType += "SMS"
+                    $smsPhoneNumber = $method.phoneNumber
+                }
+                "#microsoft.graph.emailAuthenticationMethod" {
+                    $authenticationType += "Email"
+                    $emailAuthAddress = $method.emailAddress
+                }
+                "#microsoft.graph.fido2AuthenticationMethod" {
+                    $authenticationType += "Fido2"
+                    $fido2DisplayName = $method.displayName
                 }
                 "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod" {
-                    $authDetails["Windows Hello for Business"] = "Configured"
+                    $authenticationType += "Windows Hello"
+                    $windowsHelloEnabled = $true
                 }
             }
         }
 
-        foreach ($key in $authDetails.Keys) {
-            $user | Add-Member -MemberType NoteProperty -Name $key -Value $authDetails[$key] -Force
-        }
-        }
-        }
+        # Add all properties in one grouped block
+        $user | Add-Member -MemberType NoteProperty -Name Devices `
+            -Value ($usersDetails[$user.Id] | Where { $_.requesttype -eq "registeredDevices" }).body.value.displayName -Force
 
         $user | Add-Member -MemberType NoteProperty -Name ManagerUPN `
-            -Value $($($usersDetails[$user.Id] | where {$_.requesttype -eq "manager"}).body.userPrincipalName)
+            -Value ($usersDetails[$user.Id] | Where { $_.requesttype -eq "manager" }).body.userPrincipalName -Force
 
         $user | Add-Member -MemberType NoteProperty -Name SponsorUPN `
-            -Value $(($($usersDetails[$user.Id] | where {$_.requesttype -eq "sponsor"}).body.value)[0].userPrincipalName)
+            -Value (($usersDetails[$user.Id] | Where { $_.requesttype -eq "sponsor" }).body.value)[0].userPrincipalName -Force
 
         $user | Add-Member -MemberType NoteProperty -Name ManagerDisplayName `
-            -Value $($($usersDetails[$user.Id] | Where { $_.requesttype -eq "manager" }).body.displayName)
+            -Value ($usersDetails[$user.Id] | Where { $_.requesttype -eq "manager" }).body.displayName -Force
 
         $user | Add-Member -MemberType NoteProperty -Name SponsorDisplayName `
-            -Value $($($usersDetails[$user.Id] | Where { $_.requesttype -eq "sponsor" }).body.value[0].displayName)
+            -Value ($usersDetails[$user.Id] | Where { $_.requesttype -eq "sponsor" }).body.value[0].displayName -Force
 
         $user | Add-Member -MemberType NoteProperty -Name LicensesSkuType `
-            -Value $($($usersDetails[$user.Id] | where {$_.requesttype -eq "license"}).body.value | select -expandproperty SkuPartNumber)
+            -Value (($usersDetails[$user.Id] | Where { $_.requesttype -eq "license" }).body.value | Select-Object -ExpandProperty SkuPartNumber) -Force
 
-        $user | Add-Member -MemberType NoteProperty -Name "MFA status" -Value $(if ($authenticationType.Count -gt 0) { "Enabled" } else { "Disabled" }) -Force
-        $user | Add-Member -MemberType NoteProperty -Name "Email authentication" -Value $(if ($authenticationType -contains "Email") { "Yes" } else { "No" }) -Force
-        $user | Add-Member -MemberType NoteProperty -Name "FIDO2 authentication" -Value $(if ($authenticationType -contains "Fido2") { "Yes" } else { "No" }) -Force
-        $user | Add-Member -MemberType NoteProperty -Name "Microsoft Authenticator App" -Value $(if ($authenticationType -contains "MicrosoftAuthenticator") { "Yes" } else { "No" }) -Force
-        $user | Add-Member -MemberType NoteProperty -Name "Microsoft Authenticator Lite" -Value $(if ($authenticationType -contains "TemporaryAccessPass") { "Yes" } else { "No" }) -Force
-        $user | Add-Member -MemberType NoteProperty -Name "Phone authentication" -Value $(if ($authenticationType -contains "SMS") { "Yes" } else { "No" }) -Force
-        $user | Add-Member -MemberType NoteProperty -Name "Software Oath" -Value $(if ($authenticationType -contains "SoftwareOath") { "Yes" } else { "No" }) -Force
-        $user | Add-Member -MemberType NoteProperty -Name "Windows Hello for Business" -Value $(if ($authenticationType -contains "Windows Hello") { "Yes" } else { "No" }) -Force
+        $user | Add-Member -MemberType NoteProperty -Name DefaultAuthentication `
+            -Value (($usersDetails[$user.Id] | Where { $_.requesttype -eq "authenticationPreference" }).body.systemPreferredAuthenticationMethod ?? "Not set") -Force
 
-    if ($user.OnPremisesSyncEnabled -eq $True){
-        $user.EmployeeLeaveDateTime = $user.OnPremisesExtensionAttributes.ExtensionAttribute1
+        $user | Add-Member -MemberType NoteProperty -Name AuthenticationMethod -Value $authenticationType -Force
+
+        # Add dedicated columns for detailed authentication methods
+        $user | Add-Member NoteProperty MicrosoftAuthenticatorDisplayName $microsoftAuthenticatorDisplayName -Force
+        $user | Add-Member NoteProperty EmailAuthAddress $emailAuthAddress -Force
+        $user | Add-Member NoteProperty SMSPhoneNumber $smsPhoneNumber -Force
+        $user | Add-Member NoteProperty FIDO2DisplayName $fido2DisplayName -Force
+        $user | Add-Member NoteProperty WindowsHelloEnabled $windowsHelloEnabled -Force
+        $user | Add-Member NoteProperty SoftwareOATHEnabled $softwareOathEnabled -Force
     }
 
+    if ($user.OnPremisesSyncEnabled -eq $true) {
+        $user.EmployeeLeaveDateTime = $user.OnPremisesExtensionAttributes.ExtensionAttribute1
+    }
+}
 
 Disconnect-MgGraph
 
